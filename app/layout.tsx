@@ -1,6 +1,14 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+
+import {
+  ClerkProvider,
+} from "@clerk/nextjs";
+
+import {
+  Geist,
+  Geist_Mono,
+} from "next/font/google";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -13,14 +21,11 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "WB Analytics — Дашборд Wildberries",
-  description: "Аналитика продаж, заказов и прибыли Wildberries",
+  title: "WB Analytics",
+  description: "WB Analytics Dashboard",
+
   manifest: "/manifest.json",
-  appleWebApp: {
-    capable: true,
-    statusBarStyle: "default",
-    title: "WB Analytics",
-  },
+
   icons: {
     icon: "/icon.png",
     apple: "/icon.png",
@@ -30,21 +35,23 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  viewportFit: "cover",
   themeColor: "#7c3aed",
 };
 
 export default function RootLayout({
   children,
-}: Readonly<{
+}: {
   children: React.ReactNode;
-}>) {
+}) {
   return (
-    <html
-      lang="ru"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
-      <body className="min-h-dvh font-sans">{children}</body>
-    </html>
+    <ClerkProvider dynamic>
+      <html lang="ru">
+        <body
+          className={`${geistSans.variable} ${geistMono.variable}`}
+        >
+          {children}
+        </body>
+      </html>
+    </ClerkProvider>
   );
 }

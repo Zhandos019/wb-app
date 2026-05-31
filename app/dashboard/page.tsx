@@ -18,14 +18,15 @@ export default function DashboardPage() {
           Аналитика Wildberries
         </h1>
         <p className="mt-1 text-sm text-slate-500">
-          Загрузите отчёт из личного кабинета WB для расчёта KPI и графика
-          продаж
+          Загрузите отчёт из личного кабинета WB для расчёта KPI и аналитики
         </p>
       </header>
 
       <div className="mb-6 md:hidden">
         <h1 className="text-xl font-semibold text-slate-900">Обзор</h1>
-        <p className="mt-0.5 text-sm text-slate-500">Аналитика продаж WB</p>
+        <p className="mt-0.5 text-sm text-slate-500">
+          Аналитика продаж WB
+        </p>
       </div>
 
       {error && (
@@ -43,28 +44,23 @@ export default function DashboardPage() {
         <div className="lg:col-span-1">
           <ExcelUpload onData={setStats} onError={setError} />
         </div>
+
         <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm lg:col-span-2 md:p-6">
           <div className="mb-4 flex items-center justify-between">
-          <div className="mb-3 flex gap-2">
-  <div className="rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-700">
-    📦 Хранение:{" "}
-    <span className="font-semibold text-slate-900">
-      {stats.storage?.toLocaleString("ru-RU") || 0} ₸
-    </span>
-  </div>
-</div>
             <h2 className="text-sm font-semibold text-slate-800">
               Выручка по товарам
             </h2>
+
             {stats.chart.length > 0 && (
               <span className="rounded-full bg-violet-50 px-2.5 py-0.5 text-xs font-medium text-violet-700">
                 {stats.chart.length} товаров
               </span>
             )}
           </div>
+
           <div className="w-full min-w-0">
-  <SalesChart data={stats.chart} />
-</div>
+            <SalesChart data={stats.chart} />
+          </div>
         </div>
       </div>
     </DashboardShell>

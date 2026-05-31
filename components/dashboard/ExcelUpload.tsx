@@ -8,9 +8,10 @@ import type { DashboardStats } from "@/lib/excel/types";
 type ExcelUploadProps = {
   onData: (stats: DashboardStats) => void;
   onError: (message: string | null) => void;
+  userId?: number | string;
 };
 
-export function ExcelUpload({ onData, onError }: ExcelUploadProps) {
+export function ExcelUpload({ onData, onError, userId }: ExcelUploadProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -21,9 +22,22 @@ export function ExcelUpload({ onData, onError }: ExcelUploadProps) {
     setFileName(file.name);
 
     try {
+      // 1. локальный парсинг (UI)
       const buffer = await file.arrayBuffer();
       const stats = parseWbExcel(buffer);
       onData(stats);
+
+      // 2. отправка на backend (если есть user)
+      if (userId) {
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("userId", String(userId));
+
+        await fetch("/api/upload", {
+          method: "POST",
+          body: formData,
+        });
+      }
     } catch (err) {
       setFileName(null);
       onError(err instanceof Error ? err.message : "Ошибка чтения файла");
@@ -60,6 +74,7 @@ export function ExcelUpload({ onData, onError }: ExcelUploadProps) {
       <p className="mt-4 text-center text-sm font-semibold text-slate-800">
         Загрузить отчёт Excel
       </p>
+
       <p className="mt-1 text-center text-xs text-slate-500">
         Перетащите .xlsx или нажмите для выбора
       </p>
