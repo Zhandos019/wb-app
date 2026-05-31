@@ -27,7 +27,7 @@ export function MobileHeader({
 
       <div className="flex items-center gap-2">
         
-        <UserButton afterSignOutUrl="/sign-in" />
+      <UserButton />
 
         <button
           type="button"
