@@ -30,6 +30,9 @@ export const metadata: Metadata = {
     index: true,
     follow: true,
   },
+  verification: {
+    google: "F9ZlYkt3g31quHTnbIbRqbKpH0YGVkbCEHvtr5Z5zY0",
+  },
   openGraph: {
     title: "WB Analytics — аналитика продаж Wildberries",
     description:
