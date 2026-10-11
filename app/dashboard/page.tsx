@@ -18,6 +18,8 @@ import {
 } from "@/lib/excel/types";
 import { generateMonthPeriods, type ReportPeriod } from "@/lib/reports/periods";
 
+import { MonthlySalesChart } from "@/components/dashboard/MonthlySalesChart";
+
 type ReportType = "buyout" | "main";
 
 type SavedReport = {
@@ -115,6 +117,33 @@ export default function DashboardPage() {
     () => reports.filter((report) => report.period_start.startsWith(selectedMonth)),
     [reports, selectedMonth]
   );
+
+  const monthlySales = useMemo(() => {
+    const totals = new Map<string, number>();
+
+    for (const report of reports) {
+      const month = report.period_start.slice(0, 7);
+
+      const buyoutSales = report.buyout_stats?.totalSales ?? 0;
+      const mainSales = report.main_stats?.totalSales ?? 0;
+
+      totals.set(
+        month,
+        (totals.get(month) ?? 0) + buyoutSales + mainSales
+      );
+    }
+
+    return [...totals.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([month, sales]) => ({
+        month,
+        name: new Date(`${month}-01T12:00:00`).toLocaleDateString(
+          "ru-RU",
+          { month: "short", year: "numeric" }
+        ),
+        sales,
+      }));
+  }, [reports]);
 
   const monthlyStats = useMemo<DashboardStats>(() => {
     const allStats = monthReports.flatMap((report) => [
@@ -358,6 +387,22 @@ const stats = parseWbExcel(
             Сумма показателей хранения из сохранённых отчётов.
           </p>
         </div>
+      </section>
+
+      <section className="mb-8 rounded-2xl border border-slate-200 bg-white p-5">
+        <div className="mb-5">
+          <h2 className="text-lg font-semibold text-slate-900">
+            Динамика продаж по месяцам
+          </h2>
+          <p className="mt-1 text-sm text-slate-500">
+            Сравнение продаж с предыдущим месяцем по обоим типам отчётов.
+          </p>
+        </div>
+
+        <MonthlySalesChart
+          data={monthlySales}
+          selectedMonth={selectedMonth}
+        />
       </section>
 
       <section className="mb-8 rounded-2xl border border-slate-200 bg-white p-5">
