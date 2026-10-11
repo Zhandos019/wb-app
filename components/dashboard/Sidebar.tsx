@@ -8,6 +8,7 @@ import {
   ShoppingCart,
   TrendingUp,
 } from "lucide-react";
+import { LogoutButton } from "@/components/auth/LogoutButton";
 
 const navItems = [
   { label: "Обзор", icon: LayoutDashboard, active: true },
@@ -53,9 +54,10 @@ export function Sidebar({ onNavigate }: SidebarProps) {
         ))}
       </nav>
 
-      <div className="border-t border-slate-800 px-5 py-4">
-        <p className="text-xs text-slate-500">Версия 1.0</p>
-        <p className="mt-0.5 text-xs text-slate-600">Аналитика продаж</p>
+      <div className="border-t border-slate-800 px-3 py-4">
+        <LogoutButton />
+        <p className="mt-3 px-3 text-xs text-slate-500">Версия 1.0</p>
+        <p className="mt-0.5 px-3 text-xs text-slate-600">Аналитика продаж</p>
       </div>
     </aside>
   );

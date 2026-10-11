@@ -41,12 +41,14 @@ export function parseWbExcel(buffer: ArrayBuffer): DashboardStats {
       currentRow["Обоснование для оплаты"] || ""
     ).toLowerCase();
 
+
     const storage = num(currentRow["Хранение"]);
     const deductions = num(currentRow["Удержания"]);
     const logistics = num(
       currentRow["Услуги по доставке товара покупателю"]
     );
     const fines = num(currentRow["Общая сумма штрафов"]);
+    const acceptance = num(currentRow["Операции на приемке"]);
 
     /**
      * 📦 1. ХРАНЕНИЕ (ОТДЕЛЬНО)
@@ -58,7 +60,8 @@ export function parseWbExcel(buffer: ArrayBuffer): DashboardStats {
     /**
      * 📊 2. РАСХОДЫ (без трогания хранения)
      */
-    const expenses = storage + deductions + logistics + fines;
+    const expenses =
+  storage + deductions + logistics + fines + acceptance;
 
     /**
      * 📦 3. ПРОДАЖИ (как у тебя)
