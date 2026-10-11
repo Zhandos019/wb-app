@@ -16,10 +16,31 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+
 export const metadata: Metadata = {
-  title: "WB Analytics",
-  description: "WB Analytics Dashboard",
+  metadataBase: new URL("https://wb-app-sigma.vercel.app"),
+  title: {
+    default: "WB Analytics — аналитика продаж Wildberries",
+    template: "%s | WB Analytics",
+  },
+  description:
+    "Анализируйте продажи Wildberries, отслеживайте выручку и динамику по месяцам. Загружайте Excel-отчёты и изучайте показатели магазина в одном кабинете.",
+  applicationName: "WB Analytics",
+  robots: {
+    index: true,
+    follow: true,
+  },
+  openGraph: {
+    title: "WB Analytics — аналитика продаж Wildberries",
+    description:
+      "Удобный анализ продаж, выручки и динамики магазина Wildberries.",
+    url: "https://wb-app-sigma.vercel.app/",
+    siteName: "WB Analytics",
+    locale: "ru_RU",
+    type: "website",
+  },
 };
+
 
 export const viewport: Viewport = {
   width: "device-width",
