@@ -11,7 +11,46 @@ function num(v: unknown): number {
   return isNaN(n) ? 0 : n;
 }
 
-export function parseWbExcel(buffer: ArrayBuffer): DashboardStats {
+function parseDate(value: unknown): string | null {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, "0");
+    const day = String(value.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  if (typeof value === "number") {
+    const parsed = XLSX.SSF.parse_date_code(value);
+    if (!parsed) return null;
+
+    return `${parsed.y}-${String(parsed.m).padStart(2, "0")}-${String(parsed.d).padStart(2, "0")}`;
+  }
+
+  const text = String(value).trim();
+
+  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+
+  const ru = text.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (ru) return `${ru[3]}-${ru[2]}-${ru[1]}`;
+
+  return null;
+}
+
+function formatDate(date: string): string {
+  const [year, month, day] = date.split("-");
+  return `${day}.${month}.${year}`;
+}
+
+export function parseWbExcel(
+  buffer: ArrayBuffer,
+  periodStart?: string,
+  periodEnd?: string
+): DashboardStats {
   const wb = XLSX.read(buffer, {
     type: "array",
     cellDates: true,
@@ -25,6 +64,33 @@ export function parseWbExcel(buffer: ArrayBuffer): DashboardStats {
 
   if (!rows.length) {
     throw new Error("Файл пустой");
+  }
+
+  if (periodStart && periodEnd) {
+    const invalidDates: string[] = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      const rawDate = rows[i]["Дата продажи"];
+
+      // Пустые даты пропускаем
+      if (rawDate === "") continue;
+
+      const saleDate = parseDate(rawDate);
+
+      if (!saleDate) {
+        invalidDates.push(`строка ${i + 2}: не удалось распознать дату`);
+      } else if (saleDate < periodStart || saleDate > periodEnd) {
+        invalidDates.push(`строка ${i + 2}: ${formatDate(saleDate)}`);
+      }
+
+      if (invalidDates.length >= 10) break;
+    }
+
+    if (invalidDates.length > 0) {
+      throw new Error(
+        `Дата продажи не соответствует периоду ${formatDate(periodStart)}–${formatDate(periodEnd)}. Проверьте строки: ${invalidDates.join("; ")}. Отчёт не сохранён.`
+      );
+    }
   }
 
   const byArticle = new Map<string, number>();
@@ -89,9 +155,9 @@ export function parseWbExcel(buffer: ArrayBuffer): DashboardStats {
 
     totalRevenue += finalMoney;
 
-    if (nextType.includes("продажа")) {
-      orders += 1;
-    }
+    if (reason.includes("продажа")) {
+  orders += 1;
+}
 
     /**
      * 📦 4. ТОЛЬКО ТОВАРЫ (БЕЗ ХРАНЕНИЯ)
