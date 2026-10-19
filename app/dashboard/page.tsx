@@ -57,7 +57,7 @@ const [importWait, setImportWait] = useState(0);
 const importLoopRef = useRef(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [selectedYear, setSelectedYear] = useState(currentYear);
-
+  const [wbConnected, setWbConnected] = useState<boolean | null>(null);
   useEffect(() => {
     let cancelled = false;
 
@@ -95,7 +95,25 @@ const importLoopRef = useRef(false);
       }
     }
 
+    async function loadWbConnection() {
+      try {
+        const response = await fetch("/api/wb/connection", {
+          cache: "no-store",
+        });
 
+        if (!response.ok) {
+          setWbConnected(false);
+          return;
+        }
+
+        const result = await response.json();
+        setWbConnected(result.connected === true);
+      } catch {
+        setWbConnected(false);
+      }
+    }
+
+    void loadWbConnection();
     void loadReports();
     return () => {
       cancelled = true;
@@ -132,6 +150,25 @@ const importLoopRef = useRef(false);
 
   async function runWbImport(startNew: boolean) {
     if (importLoopRef.current) return;
+  
+    try {
+      const connectionResponse = await fetch("/api/wb/connection", {
+        cache: "no-store",
+      });
+  
+      const connection = await connectionResponse.json();
+  
+      if (!connectionResponse.ok || connection.connected !== true) {
+        setWbConnected(false);
+        setNotice("Сначала подключите токен Wildberries, чтобы загрузить историю.");
+        return;
+      }
+  
+      setWbConnected(true);
+    } catch {
+      setNotice("Не удалось проверить подключение Wildberries. Попробуйте ещё раз.");
+      return;
+    }
 
     importLoopRef.current = true;
     setRefreshing(true);
@@ -355,7 +392,22 @@ const importLoopRef = useRef(false);
 
 
 </header>
-
+{wbConnected === false && (
+  <div className="mb-5 rounded-2xl border border-amber-200 bg-amber-50 p-5">
+    <h2 className="font-semibold text-slate-900">
+      Подключите Wildberries
+    </h2>
+    <p className="mt-1 text-sm text-slate-600">
+      Чтобы загружать продажи и анализировать показатели, сначала подключите API-токен своего кабинета.
+    </p>
+    <Link
+      href="/dashboard/connection"
+      className="mt-4 inline-flex rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-violet-700"
+    >
+      Подключить Wildberries
+    </Link>
+  </div>
+)}
 {importJob && (
     <section className="mb-5 rounded-xl border border-slate-200 bg-white p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
