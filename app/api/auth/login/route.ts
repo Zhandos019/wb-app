@@ -1,13 +1,7 @@
 
 import { NextResponse } from "next/server";
-import bcrypt from "bcryptjs";
+import { createSupabaseServerClient } from "@/lib/supabaseServer";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
-import {
-  AUTH_COOKIE,
-  getAuthCookieOptions,
-  getJwtSecret,
-  signAuthToken,
-} from "@/lib/auth";
 
 type LoginBody = {
   email?: unknown;
@@ -32,73 +26,79 @@ export async function POST(req: Request) {
 
     if (!email || !isValidEmail(email) || !password) {
       return NextResponse.json(
-        { success: false, error: "Введите email и пароль" },
+        {
+          success: false,
+          error: "Введите корректный email и пароль",
+        },
         { status: 400 }
       );
     }
 
-    const secret = getJwtSecret();
+    const supabase = await createSupabaseServerClient();
 
-    if (!secret) {
+    const { data, error } =
+      await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+    if (error || !data.user) {
       return NextResponse.json(
-        { success: false, error: "Сервер авторизации не настроен" },
-        { status: 500 }
-      );
-    }
-
-    const { data: user, error } = await supabaseAdmin
-      .from("users")
-      .select("id, email, password_hash")
-      .eq("email", email)
-      .maybeSingle();
-
-    if (error) {
-      console.error("Login lookup failed:", error.message);
-
-      return NextResponse.json(
-        { success: false, error: "Не удалось выполнить вход. Попробуйте позже." },
-        { status: 500 }
-      );
-    }
-
-    if (!user) {
-      return NextResponse.json(
-        { success: false, error: "Неверный email или пароль" },
+        {
+          success: false,
+          error:
+            "Не удалось войти. Проверьте email и пароль, а также подтвердите email по ссылке из письма.",
+        },
         { status: 401 }
       );
     }
 
-    const valid = await bcrypt.compare(password, user.password_hash);
+    const { data: dbUser, error: dbError } =
+      await supabaseAdmin
+        .from("users")
+        .select("id")
+        .eq("auth_user_id", data.user.id)
+        .maybeSingle();
 
-    if (!valid) {
+    if (dbError) {
+      console.error(
+        "Login user lookup failed:",
+        dbError.message
+      );
+
+      await supabase.auth.signOut();
+
       return NextResponse.json(
-        { success: false, error: "Неверный email или пароль" },
-        { status: 401 }
+        {
+          success: false,
+          error: "Не удалось загрузить профиль. Попробуйте позже.",
+        },
+        { status: 500 }
       );
     }
 
-    const token = signAuthToken(
-      {
-        id: Number(user.id),
-        email: user.email,
-      },
-      secret
-    );
+    if (!dbUser) {
+      await supabase.auth.signOut();
 
-    const response = NextResponse.json({ success: true });
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            "Профиль не связан с аккаунтом. Подтвердите email по ссылке из письма или обратитесь в поддержку.",
+        },
+        { status: 403 }
+      );
+    }
 
-    response.cookies.set(
-      AUTH_COOKIE,
-      token,
-      getAuthCookieOptions()
-    );
-
-    return response;
+    return NextResponse.json({ success: true });
   } catch (error) {
     console.error("Login failed:", error);
 
     return NextResponse.json(
-      { success: false, error: "Не удалось войти. Проверьте настройки сервера." },
+      {
+        success: false,
+        error: "Не удалось войти. Попробуйте позже.",
+      },
       { status: 500 }
     );
   }

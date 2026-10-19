@@ -2,9 +2,10 @@
 "use client";
 
 import {
+  Bar,
+  BarChart,
   CartesianGrid,
-  Line,
-  LineChart,
+  Cell,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -48,9 +49,7 @@ export function MonthlySalesChart({
     (item) => item.month === selectedMonth
   );
 
-  const previousDate = new Date(
-    `${selectedMonth}-01T12:00:00`
-  );
+  const previousDate = new Date(`${selectedMonth}-01T12:00:00`);
   previousDate.setMonth(previousDate.getMonth() - 1);
 
   const previousMonth = [
@@ -73,6 +72,15 @@ export function MonthlySalesChart({
 
   const hasPrevious = Boolean(previous);
 
+  const chartData = [...data].sort((a, b) =>
+    a.month.localeCompare(b.month)
+  );
+
+  const maxSales = Math.max(
+    0,
+    ...chartData.map((item) => item.sales)
+  );
+
   return (
     <div className="space-y-5">
       <div className="grid gap-4 sm:grid-cols-3">
@@ -90,7 +98,9 @@ export function MonthlySalesChart({
             Предыдущий месяц
           </p>
           <p className="mt-2 text-xl font-semibold text-slate-900">
-            {hasPrevious ? formatMoney(previousSales) : "Нет данных"}
+            {hasPrevious
+              ? formatMoney(previousSales)
+              : "Нет данных"}
           </p>
         </div>
 
@@ -131,56 +141,85 @@ export function MonthlySalesChart({
         </div>
       </div>
 
-      {data.length === 0 ? (
-        <div className="flex h-64 items-center justify-center text-sm text-slate-500">
+      {chartData.length === 0 ? (
+        <div className="flex h-64 items-center justify-center text-center text-sm text-slate-500">
           Загрузите отчёты, чтобы увидеть динамику продаж
         </div>
       ) : (
-        <div className="h-80 w-full">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart
-              data={data}
-              margin={{ top: 15, right: 20, left: 15, bottom: 15 }}
-            >
-              <CartesianGrid strokeDasharray="3 3" />
+        <div className="rounded-xl border border-gray-100 p-4">
+          <div className="flex items-center justify-between gap-3">
+            <p className="font-semibold text-gray-900">
+              Динамика продаж
+            </p>
+            <span className="text-xs text-gray-400">
+              По месяцам
+            </span>
+          </div>
 
-              <XAxis
-                dataKey="name"
-                tick={{ fontSize: 11 }}
-              />
+          <div className="mt-5 h-64 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={chartData}
+                margin={{ top: 12, right: 8, left: 0, bottom: 4 }}
+              >
+                <CartesianGrid
+                  vertical={false}
+                  stroke="#f3f4f6"
+                  strokeDasharray="3 3"
+                />
 
-              <YAxis
-                width={90}
-                tick={{ fontSize: 11 }}
-                tickFormatter={(value: number) =>
-                  new Intl.NumberFormat("ru-RU", {
-                    notation: "compact",
-                    maximumFractionDigits: 1,
-                  }).format(value)
-                }
-              />
+                <XAxis
+                  dataKey="name"
+                  axisLine={false}
+                  tickLine={false}
+                  tick={{ fontSize: 11, fill: "#9ca3af" }}
+                  tickMargin={10}
+                  interval="preserveStartEnd"
+                />
 
-              <Tooltip
-                labelFormatter={(_, payload) =>
-                  payload?.[0]?.payload?.name ?? ""
-                }
-                formatter={(value) => [
-                  formatMoney(Number(value ?? 0)),
-                  "Продажи",
-                ]}
-              />
+                <YAxis
+                  hide
+                  domain={[0, maxSales > 0 ? maxSales * 1.1 : 1]}
+                />
 
-              <Line
-                type="monotone"
-                dataKey="sales"
-                name="Продажи"
-                stroke="#7c3aed"
-                strokeWidth={3}
-                dot={{ r: 4 }}
-                activeDot={{ r: 6 }}
-              />
-            </LineChart>
-          </ResponsiveContainer>
+                <Tooltip
+                  cursor={{ fill: "#f5f3ff" }}
+                  labelFormatter={(_, payload) =>
+                    payload?.[0]?.payload
+                      ? formatMonth(payload[0].payload.month)
+                      : ""
+                  }
+                  formatter={(value) => [
+                    formatMoney(Number(value ?? 0)),
+                    "Продажи",
+                  ]}
+                  contentStyle={{
+                    borderRadius: 12,
+                    border: "1px solid #e5e7eb",
+                    fontSize: 12,
+                  }}
+                />
+
+                <Bar
+                  dataKey="sales"
+                  name="Продажи"
+                  radius={[5, 5, 0, 0]}
+                  maxBarSize={34}
+                  animationDuration={500}
+                >
+                  {chartData.map((item) => (
+                    <Cell
+                      key={item.month}
+                      fill="#8b5cf6"
+                      fillOpacity={
+                        item.month === selectedMonth ? 1 : 0.8
+                      }
+                    />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
         </div>
       )}
     </div>

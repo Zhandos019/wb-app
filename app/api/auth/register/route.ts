@@ -1,6 +1,6 @@
 
 import { NextResponse } from "next/server";
-import bcrypt from "bcryptjs";
+import { createSupabaseServerClient } from "@/lib/supabaseServer";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 type RegisterBody = {
@@ -41,72 +41,129 @@ export async function POST(req: Request) {
       );
     }
 
-    const { data: existingUser, error: lookupError } =
+    // Проверяем профиль в базе приложения.
+    const { data: profile, error: profileError } =
       await supabaseAdmin
         .from("users")
-        .select("id")
-        .eq("email", email)
+        .select("id, auth_user_id")
+        .ilike("email", email)
         .maybeSingle();
 
-    if (lookupError) {
-      console.error("Register lookup failed:", lookupError.message);
+    if (profileError) {
+      console.error("Profile lookup failed:", profileError.message);
 
       return NextResponse.json(
-        { success: false, error: "Не удалось проверить пользователя" },
+        { success: false, error: "Не удалось проверить email. Попробуйте позже." },
         { status: 500 }
       );
     }
 
-    if (existingUser) {
+    if (profile?.auth_user_id) {
+      const { data: authUser, error: authUserError } =
+        await supabaseAdmin.auth.admin.getUserById(profile.auth_user_id);
+
+      if (authUserError) {
+        console.error("Auth user lookup failed:", authUserError.message);
+
+        return NextResponse.json(
+          { success: false, error: "Не удалось проверить аккаунт. Попробуйте позже." },
+          { status: 500 }
+        );
+      }
+
+      if (authUser.user?.email_confirmed_at) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Эта почта уже зарегистрирована. Войдите в свой аккаунт или используйте другую почту.",
+          },
+          { status: 409 }
+        );
+      }
+    }
+
+    // Проверяем Auth, в том числе пользователей без связанного профиля.
+    const { data: usersPage, error: listError } =
+      await supabaseAdmin.auth.admin.listUsers({
+        page: 1,
+        perPage: 1000,
+      });
+
+    if (listError) {
+      console.error("Auth users lookup failed:", listError.message);
+
+      return NextResponse.json(
+        { success: false, error: "Не удалось проверить email. Попробуйте позже." },
+        { status: 500 }
+      );
+    }
+
+    const existingAuthUser = usersPage.users.find(
+      (user) => user.email?.toLowerCase() === email
+    );
+
+    if (existingAuthUser?.email_confirmed_at) {
       return NextResponse.json(
         {
           success: false,
-          error: "Пользователь с таким email уже существует",
+          error: "Эта почта уже зарегистрирована. Войдите в свой аккаунт или используйте другую почту.",
         },
         { status: 409 }
       );
     }
 
-    const passwordHash = await bcrypt.hash(password, 10);
+    const supabase = await createSupabaseServerClient();
 
-    const { error: insertError } = await supabaseAdmin
-      .from("users")
-      .insert({
-        email,
-        password_hash: passwordHash,
-      });
+    const emailRedirectTo = new URL(
+      "/auth/callback",
+      req.url
+    ).toString();
 
-    if (insertError) {
-      if (insertError.code === "23505") {
-        return NextResponse.json(
-          {
-            success: false,
-            error: "Пользователь с таким email уже существует",
-          },
-          { status: 409 }
-        );
-      }
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { emailRedirectTo },
+    });
 
-      console.error("Register insert failed:", insertError.message);
+    if (error) {
+      console.error("Supabase registration failed:", error.message);
 
       return NextResponse.json(
         {
           success: false,
-          error: "Не удалось создать аккаунт. Попробуйте позже.",
+          error: "Не удалось начать регистрацию. Попробуйте позже или проверьте настройки email.",
         },
-        { status: 500 }
+        { status: 400 }
       );
     }
 
-    return NextResponse.json({ success: true });
+    // Supabase может не сообщать о существовании email
+    // в обычном ответе signUp. Не показываем успех, если
+    // подтверждённый пользователь уже существовал.
+    if (
+      existingAuthUser?.id &&
+      data.user?.id === existingAuthUser.id &&
+      existingAuthUser.email_confirmed_at
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Эта почта уже зарегистрирована. Войдите в свой аккаунт или используйте другую почту.",
+        },
+        { status: 409 }
+      );
+    }
+
+    return NextResponse.json({
+      success: true,
+      message:
+        "Если регистрация доступна, код будет отправлен на вашу почту. Проверьте также папку «Спам».",
+    });
   } catch (error) {
     console.error("Register failed:", error);
 
     return NextResponse.json(
-      {
-        success: false,
-        error: "Не удалось создать аккаунт. Проверьте настройки сервера.",
-      },
+      { success: false, error: "Не удалось создать аккаунт. Попробуйте позже." },
       { status: 500 }
     );
   }

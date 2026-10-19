@@ -1,37 +1,20 @@
 
 "use client";
 
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  type ChangeEvent,
-} from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { DashboardShell } from "@/components/dashboard/DashboardShell";
-import { SalesChart } from "@/components/dashboard/SalesChart";
-import { StatCards } from "@/components/dashboard/StatCards";
-import { parseWbExcel } from "@/lib/excel/parseWbExcel";
-import {
-  EMPTY_STATS,
-  type DashboardStats,
-} from "@/lib/excel/types";
-import { generateMonthPeriods, type ReportPeriod } from "@/lib/reports/periods";
-
 import { MonthlySalesChart } from "@/components/dashboard/MonthlySalesChart";
-
-type ReportType = "buyout" | "main";
-
-type SavedReport = {
-  id: number;
-  period_start: string;
-  period_end: string;
-  buyout_file_name: string | null;
-  buyout_stats: DashboardStats | null;
-  main_file_name: string | null;
-  main_stats: DashboardStats | null;
-  updated_at: string;
+type WbMonthlyStats = {
+  totalSales: number;
+  orders: number;
+  avgCheck: number;
+  profit: number;
+  storage: number;
+  chart: { name: string; sales: number }[];
+  reportIds: number[];
 };
+
 
 function getCurrentMonth() {
   const now = new Date();
@@ -44,442 +27,523 @@ function formatMoney(value: number) {
   }).format(value) + " ₸";
 }
 
+function monthLabel(month: string, withYear = false) {
+  return new Date(`${month}-01T12:00:00`).toLocaleDateString("ru-RU", {
+    month: "long",
+    ...(withYear ? { year: "numeric" } : {}),
+  });
+}
+type WbImportJob = {
+  status: string;
+  phase: string;
+  total_reports: number;
+  processed_reports: number;
+  total_rows: number;
+  processed_rows: number;
+  next_run_at: string | null;
+  retry_after_seconds: number | null;
+  error_message: string | null;
+};
 export default function DashboardPage() {
-  const [selectedMonth, setSelectedMonth] = useState(getCurrentMonth);
-  const [reports, setReports] = useState<SavedReport[]>([]);
+  const currentMonth = getCurrentMonth();
+  const currentYear = Number(currentMonth.slice(0, 4));
+  const [wbMonths, setWbMonths] = useState<Record<string, WbMonthlyStats>>({});
   const [loading, setLoading] = useState(true);
-  const [uploading, setUploading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-
-  const loadReports = useCallback(async () => {
-    const response = await fetch("/api/reports", {
-      cache: "no-store",
-    });
-    const result = await response.json();
-
-    if (!response.ok || !result.success) {
-      throw new Error(result.error || "Не удалось загрузить отчёты");
-    }
-
-    setReports(result.reports ?? []);
-  }, []);
+const [notice, setNotice] = useState<string | null>(null);
+const [refreshing, setRefreshing] = useState(false);
+const [importJob, setImportJob] = useState<WbImportJob | null>(null);
+const [importWait, setImportWait] = useState(0);
+const importLoopRef = useRef(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [selectedYear, setSelectedYear] = useState(currentYear);
 
   useEffect(() => {
     let cancelled = false;
 
-    async function load() {
-      setLoading(true);
-      setError(null);
-
+   
+    async function loadReports() {
       try {
-        const response = await fetch("/api/reports", {
+        const response = await fetch("/api/wb/stats", {
           cache: "no-store",
         });
+    
         const result = await response.json();
-
+    
         if (!response.ok || !result.success) {
-          throw new Error(result.error || "Не удалось загрузить отчёты");
+          throw new Error(
+            result.error || "Не удалось загрузить статистику WB"
+          );
         }
-
+    
         if (!cancelled) {
-          setReports(result.reports ?? []);
+          setWbMonths(result.months ?? {});
+          setError(null);
         }
       } catch (err) {
         if (!cancelled) {
           setError(
             err instanceof Error
               ? err.message
-              : "Ошибка загрузки данных"
+              : "Ошибка загрузки статистики WB"
           );
         }
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     }
 
-    void load();
+
+    void loadReports();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+ 
+
+  
+  const waitForSeconds = async (seconds: number) => {
+    const endAt = Date.now() + Math.max(1, seconds) * 1000;
+
+    while (Date.now() < endAt && importLoopRef.current) {
+      const remaining = Math.ceil((endAt - Date.now()) / 1000);
+      setImportWait(remaining);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+
+    setImportWait(0);
+  };
+
+  async function refreshWbStats() {
+    const response = await fetch("/api/wb/stats", {
+      cache: "no-store",
+    });
+    const result = await response.json();
+
+    if (!response.ok || !result.success) {
+      throw new Error(result.error || "Не удалось обновить статистику WB.");
+    }
+
+    setWbMonths(result.months ?? {});
+  }
+
+  async function runWbImport(startNew: boolean) {
+    if (importLoopRef.current) return;
+
+    importLoopRef.current = true;
+    setRefreshing(true);
+    setError(null);
+    setNotice(null);
+    setImportWait(0);
+
+    try {
+      let response: Response;
+      let result: any;
+
+      if (startNew) {
+        response = await fetch("/api/wb/import", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "start" }),
+        });
+
+        result = await response.json();
+
+        if (!response.ok || !result.success) {
+          throw new Error(result.error || "Не удалось запустить импорт WB.");
+        }
+      } else {
+        response = await fetch("/api/wb/import", {
+          cache: "no-store",
+        });
+
+        result = await response.json();
+
+        if (!response.ok || !result.success) {
+          throw new Error(result.error || "Не удалось получить состояние импорта.");
+        }
+
+        if (result.job?.status !== "running") {
+          setImportJob(result.job ?? null);
+          return;
+        }
+      }
+
+      if (result.job) setImportJob(result.job);
+
+      while (importLoopRef.current) {
+        response = await fetch("/api/wb/import", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "step" }),
+        });
+
+        result = await response.json();
+
+        if (!response.ok || !result.success) {
+          throw new Error(
+            result.error ||
+              `Ошибка импорта WB (${response.status}). Попробуйте продолжить позже.`
+          );
+        }
+
+        if (result.job) {
+          setImportJob(result.job);
+        }
+
+        if (result.finished || result.job?.status === "completed") {
+          await refreshWbStats();
+          setNotice("Импорт истории Wildberries завершён. Статистика обновлена.");
+          break;
+        }
+
+        if (result.waiting) {
+          const wait = Math.max(
+            1,
+            Number(result.waitSeconds) ||
+              Number(result.job?.retry_after_seconds) ||
+              60
+          );
+
+          if (result.job) setImportJob(result.job);
+
+          await waitForSeconds(wait);
+          continue;
+        }
+
+        if (result.job?.status !== "running") {
+          setNotice("Импорт остановлен: активных задач нет.");
+          break;
+        }
+
+        // Обновляем месячную статистику после каждого шага.
+        await refreshWbStats();
+      }
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Не удалось выполнить импорт WB."
+      );
+    } finally {
+      importLoopRef.current = false;
+      setRefreshing(false);
+      setImportWait(0);
+
+      try {
+        const response = await fetch("/api/wb/import", {
+          cache: "no-store",
+        });
+        const result = await response.json();
+
+        if (response.ok && result.success) {
+          setImportJob(result.job ?? null);
+        }
+      } catch {
+        // Состояние импорта сохранено в базе данных.
+      }
+    }
+  }
+
+  async function handleWbImport() {
+    await runWbImport(true);
+  }
+
+  async function resumeWbImport() {
+    await runWbImport(false);
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function restoreImport() {
+      try {
+        const response = await fetch("/api/wb/import", {
+          cache: "no-store",
+        });
+        const result = await response.json();
+
+        if (cancelled || !response.ok || !result.success) return;
+
+        setImportJob(result.job ?? null);
+
+        if (
+          result.job?.status === "running" &&
+          !result.job?.error_message
+        ) {
+          void runWbImport(false);
+        }
+      } catch {
+        // Состояние можно проверить повторно кнопкой импорта.
+      }
+    }
+
+    void restoreImport();
 
     return () => {
       cancelled = true;
     };
   }, []);
 
-  const periods = useMemo(() => {
-    const [year, month] = selectedMonth.split("-").map(Number);
-
-    if (!year || !month) return [];
-
-    return generateMonthPeriods(year, month);
-  }, [selectedMonth]);
-
-  const monthReports = useMemo(
-    () => reports.filter((report) => report.period_start.startsWith(selectedMonth)),
-    [reports, selectedMonth]
-  );
-
+  
   const monthlySales = useMemo(() => {
-    const totals = new Map<string, number>();
-
-    for (const report of reports) {
-      const month = report.period_start.slice(0, 7);
-
-      const buyoutSales = report.buyout_stats?.totalSales ?? 0;
-      const mainSales = report.main_stats?.totalSales ?? 0;
-
-      totals.set(
-        month,
-        (totals.get(month) ?? 0) + buyoutSales + mainSales
-      );
-    }
-
-    return [...totals.entries()]
+    return Object.entries(wbMonths)
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([month, sales]) => ({
+      .map(([month, stats]) => ({
         month,
         name: new Date(`${month}-01T12:00:00`).toLocaleDateString(
           "ru-RU",
-          { month: "short", year: "numeric" }
+          {
+            month: "short",
+            year: "numeric",
+          }
         ),
-        sales,
+        sales: stats.totalSales,
       }));
-  }, [reports]);
+  }, [wbMonths]);
+ 
+  const months = useMemo(() => {
+    const result: string[] = [];
+    const start = new Date(2025, 0, 1);
+    const current = new Date(currentYear, Number(currentMonth.slice(5, 7)) - 1, 1);
 
-  const monthlyStats = useMemo<DashboardStats>(() => {
-    const allStats = monthReports.flatMap((report) => [
-      report.buyout_stats,
-      report.main_stats,
-    ]).filter((stats): stats is DashboardStats => stats !== null);
-
-    if (allStats.length === 0) return EMPTY_STATS;
-
-    const totalSales = allStats.reduce(
-      (sum, stats) => sum + stats.totalSales,
-      0
-    );
-    const orders = allStats.reduce(
-      (sum, stats) => sum + stats.orders,
-      0
-    );
-    const profit = allStats.reduce(
-      (sum, stats) => sum + stats.profit,
-      0
-    );
-    const storage = allStats.reduce(
-      (sum, stats) => sum + stats.storage,
-      0
-    );
-
-    const articles = new Map<string, number>();
-
-    for (const stats of allStats) {
-      for (const item of stats.chart) {
-        articles.set(
-          item.name,
-          (articles.get(item.name) ?? 0) + item.sales
-        );
-      }
-    }
-
-    const chart = [...articles.entries()]
-  .filter(([, sales]) => sales !== 0)
-  .sort((a, b) => b[1] - a[1])
-  .map(([name, sales]) => ({ name, sales }));
-
-    return {
-      totalSales,
-      orders,
-      avgCheck: orders ? totalSales / orders : 0,
-      profit,
-      storage,
-      chart,
-    };
-  }, [monthReports]);
-
-  async function handleUpload(
-    event: ChangeEvent<HTMLInputElement>,
-    period: ReportPeriod,
-    reportType: ReportType
-  ) {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-
-    if (!file) return;
-
-    if (!/\.(xlsx|xls)$/i.test(file.name)) {
-      setError("Выберите файл Excel с расширением .xlsx или .xls");
-      return;
-    }
-
-    const key = `${period.start}_${reportType}`;
-
-    setUploading(key);
-    setError(null);
-    setNotice(null);
-
-    try {
-      const buffer = await file.arrayBuffer();
-const stats = parseWbExcel(
-  buffer,
-  period.start,
-  period.end
-);
-
-      const response = await fetch("/api/reports", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          periodStart: period.start,
-          periodEnd: period.end,
-          reportType,
-          fileName: file.name,
-          stats,
-        }),
-      });
-
-      const result = await response.json();
-
-      if (!response.ok || !result.success) {
-        throw new Error(result.error || "Не удалось сохранить отчёт");
-      }
-
-      await loadReports();
-      setNotice(`Отчёт «${file.name}» сохранён.`);
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Не удалось обработать файл"
+    for (
+      let date = new Date(start);
+      date <= current;
+      date = new Date(date.getFullYear(), date.getMonth() + 1, 1)
+    ) {
+      result.push(
+        `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`
       );
-    } finally {
-      setUploading(null);
     }
-  }
 
-  function findReport(period: ReportPeriod) {
-    return reports.find(
-      (report) =>
-        report.period_start === period.start &&
-        report.period_end === period.end
-    );
-  }
+    return result;
+  }, [currentMonth, currentYear]);
 
-  function renderUploadSlot(
-    period: ReportPeriod,
-    type: ReportType,
-    title: string,
-    fileName: string | null | undefined
-  ) {
-    const key = `${period.start}_${type}`;
-    const isUploading = uploading === key;
 
-    return (
-      <div className="rounded-xl border border-slate-200 bg-white p-4">
-        <div className="mb-3 flex items-start justify-between gap-3">
-          <div>
-            <h3 className="text-sm font-semibold text-slate-800">
-              {title}
-            </h3>
-            <p className="mt-1 break-all text-xs text-slate-500">
-              {fileName || "Файл ещё не загружен"}
-            </p>
-          </div>
-          <span
-            className={`shrink-0 rounded-full px-2.5 py-1 text-xs ${
-              fileName
-                ? "bg-emerald-50 text-emerald-700"
-                : "bg-slate-100 text-slate-600"
-            }`}
-          >
-            {fileName ? "Сохранён" : "Нет файла"}
-          </span>
-        </div>
-
-        <label className="inline-flex cursor-pointer items-center justify-center rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700">
-          {isUploading
-            ? "Обработка..."
-            : fileName
-              ? "Заменить файл"
-              : "Загрузить Excel"}
-          <input
-            type="file"
-            accept=".xlsx,.xls"
-            disabled={uploading !== null}
-            className="hidden"
-            onChange={(event) =>
-              void handleUpload(event, period, type)
-            }
-          />
-        </label>
-      </div>
-    );
-  }
-
-  const monthTitle = selectedMonth
-    ? new Date(`${selectedMonth}-01T12:00:00`).toLocaleDateString(
-        "ru-RU",
-        { month: "long", year: "numeric" }
-      )
-    : "";
+  const years = [...new Set(months.map((month) => Number(month.slice(0, 4))))].sort(
+    (a, b) => b - a
+  );
 
   return (
     <DashboardShell>
-      <header className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
-          Аналитика Wildberries
-        </h1>
-        <p className="mt-1 text-sm text-slate-500">
-          Отчёты по периодам, продажи и показатели за месяц
-        </p>
-      </header>
+     
+<header className="mb-8">
+  
 
+<div className="flex flex-wrap items-center gap-3">
+    <button
+      type="button"
+      onClick={() => void handleWbImport()}
+      disabled={refreshing}
+      className="rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60"
+    >
+      {refreshing
+        ? "Импорт выполняется..."
+        : importJob?.status === "running"
+          ? "Продолжить импорт истории"
+          : "Загрузить всю историю"}
+    </button>
+
+    {importJob?.status === "completed" && (
+      <span className="text-sm text-emerald-700">
+        История загружена
+      </span>
+    )}
+  </div>
+
+
+</header>
+
+{importJob && (
+    <section className="mb-5 rounded-xl border border-slate-200 bg-white p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="font-semibold text-slate-900">
+          Загрузка истории Wildberries
+        </h2>
+        <span className="text-sm text-slate-500">
+          {importJob.status === "completed"
+            ? "Завершено"
+            : importJob.status === "running"
+              ? "В процессе"
+              : importJob.status}
+        </span>
+      </div>
+
+      <p className="mt-2 text-sm text-slate-600">
+        Этап:{" "}
+        {importJob.phase === "list"
+          ? "Получение списка отчётов"
+          : importJob.phase === "details"
+            ? "Загрузка операций отчётов"
+            : importJob.phase === "completed"
+              ? "Импорт завершён"
+              : importJob.phase}
+      </p>
+
+      <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
+        <p>
+          Обработано отчётов:{" "}
+          <strong>{importJob.processed_reports}</strong>
+          {importJob.total_reports > 0
+            ? ` из ${importJob.total_reports}`
+            : ""}
+        </p>
+        <p>
+          Сохранено строк операций:{" "}
+          <strong>{importJob.processed_rows}</strong>
+        </p>
+      </div>
+
+      {importJob.total_reports > 0 && (
+        <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
+          <div
+            className="h-full rounded-full bg-violet-600 transition-all"
+            style={{
+              width: `${Math.min(
+                100,
+                (importJob.processed_reports / importJob.total_reports) * 100
+              )}%`,
+            }}
+          />
+        </div>
+      )}
+
+      {refreshing && importWait > 0 && (
+        <p className="mt-3 text-sm text-amber-700">
+          Следующий запрос через {importWait} сек.
+        </p>
+      )}
+
+      {importJob.error_message && (
+        <p className="mt-3 text-sm text-red-600">
+          Последняя ошибка: {importJob.error_message}
+        </p>
+      )}
+    </section>
+  )}
+
+       
       {error && (
-        <div
-          role="alert"
-          className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
-        >
+        <div role="alert" className="mb-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
           {error}
         </div>
       )}
-
-      {notice && (
-        <div
-          role="status"
-          className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800"
-        >
-          {notice}
-        </div>
-      )}
-
-      <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <h2 className="text-lg font-semibold text-slate-900">
-              Отчётный месяц
-            </h2>
-            <p className="mt-1 text-sm text-slate-500">
-              Выберите месяц, чтобы просмотреть периоды и статистику.
-            </p>
-          </div>
-
-          <input
-            type="month"
-            value={selectedMonth}
-            onChange={(event) => setSelectedMonth(event.target.value)}
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
-          />
-        </div>
-      </section>
-
-      <section className="mb-6">
-        <h2 className="mb-3 text-lg font-semibold text-slate-900">
-          Общая статистика за {monthTitle}
+{notice && (
+  <div
+    role="status"
+    className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800"
+  >
+    {notice}
+  </div>
+)}
+      <section className="mb-8 rounded-2xl border border-slate-200 bg-white p-5">
+        <h2 className="text-lg font-semibold text-slate-900">
+          Динамика продаж по месяцам
         </h2>
-        <StatCards stats={monthlyStats} />
-        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-5">
-          <h3 className="mb-1 text-sm font-medium text-slate-500">
-            Хранение за месяц
-          </h3>
-          <p className="text-xl font-semibold text-slate-900">
-            {formatMoney(monthlyStats.storage)}
-          </p>
-          <p className="mt-1 text-xs text-slate-500">
-            Сумма показателей хранения из сохранённых отчётов.
-          </p>
-        </div>
-      </section>
-
-      <section className="mb-8 rounded-2xl border border-slate-200 bg-white p-5">
-        <div className="mb-5">
-          <h2 className="text-lg font-semibold text-slate-900">
-            Динамика продаж по месяцам
-          </h2>
-          <p className="mt-1 text-sm text-slate-500">
-            Сравнение продаж с предыдущим месяцем по обоим типам отчётов.
-          </p>
-        </div>
-
-        <MonthlySalesChart
-          data={monthlySales}
-          selectedMonth={selectedMonth}
-        />
-      </section>
-
-      <section className="mb-8 rounded-2xl border border-slate-200 bg-white p-5">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h2 className="text-lg font-semibold text-slate-900">
-              Продажи по товарам
-            </h2>
-            <p className="mt-1 text-sm text-slate-500">
-              Данные из загруженных отчётов за выбранный месяц.
-            </p>
-          </div>
-          <span className="text-sm text-slate-500">
-            {monthlyStats.chart.length} товаров
-          </span>
-        </div>
-        <SalesChart data={monthlyStats.chart} />
-      </section>
-
-      <section>
-        <div className="mb-4">
-          <h2 className="text-xl font-semibold text-slate-900">
-            Отчёты по периодам
-          </h2>
-          <p className="mt-1 text-sm text-slate-500">
-            Загружайте основной отчёт и отчёт по выкупам отдельно.
-            Повторная загрузка заменяет сохранённые показатели этого типа.
-          </p>
-        </div>
+        <p className="mb-5 mt-1 text-sm text-slate-500">
+  Динамика продаж по обработанным отчётам Wildberries API.
+</p>
 
         {loading ? (
-          <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-500">
-            Загружаем сохранённые отчёты...
-          </div>
+          <p className="py-8 text-sm text-slate-500">Загружаем данные...</p>
+        ) : monthlySales.length > 0 ? (
+          <MonthlySalesChart data={monthlySales} selectedMonth={currentMonth} />
         ) : (
-          <div className="space-y-4">
-            {periods.map((period) => {
-              const saved = findReport(period);
+          <div className="rounded-xl bg-slate-50 px-4 py-8 text-center">
+           <p className="text-sm text-slate-600">
+  Пока нет обработанных отчётов WB. После обработки данных здесь появится динамика по месяцам.
+</p>
+          </div>
+        )}
+      </section>
 
-              return (
-                <article
-                  key={`${period.start}_${period.end}`}
-                  className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5"
+      <section className="rounded-2xl border border-slate-200 bg-white p-5">
+        <div className="mb-4">
+        <h2 className="text-lg font-semibold text-slate-900">
+  Аналитика по месяцам
+</h2>
+<p className="mt-1 text-sm text-slate-500">
+  Выберите год и месяц для просмотра статистики Wildberries.
+</p>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setPickerOpen((open) => !open)}
+          className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-left hover:border-violet-300 hover:bg-violet-50"
+        >
+          <span>
+            <span className="block text-xs text-slate-500">Выбор периода</span>
+            <span className="mt-1 block font-semibold text-slate-900">
+              Выберите год и месяц
+            </span>
+          </span>
+          <span className="text-violet-600">{pickerOpen ? "▲" : "▼"}</span>
+        </button>
+
+        
+
+        {pickerOpen && (
+          <div className="mt-4 border-t border-slate-100 pt-4">
+            <h3 className="mb-3 text-sm font-semibold text-slate-700">1. Выберите год</h3>
+
+            <div className="flex flex-wrap gap-2">
+              {years.map((year) => (
+                <button
+                  key={year}
+                  type="button"
+                  onClick={() => setSelectedYear(year)}
+                  className={`rounded-lg border px-4 py-2 text-sm font-medium ${
+                    selectedYear === year
+                      ? "border-violet-600 bg-violet-600 text-white"
+                      : "border-slate-200 bg-white text-slate-700 hover:border-violet-300"
+                  }`}
                 >
-                  <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-                    <h3 className="font-semibold text-slate-900">
-                      {period.label}
-                    </h3>
-                    <span className="text-xs text-slate-500">
-                      {period.start} — {period.end}
-                    </span>
-                  </div>
+                  {year}
+                </button>
+              ))}
+            </div>
 
-                  <div className="grid gap-4 md:grid-cols-2">
-                    {renderUploadSlot(
-                      period,
-                      "buyout",
-                      "Отчёт по выкупам",
-                      saved?.buyout_file_name
-                    )}
-                    {renderUploadSlot(
-                      period,
-                      "main",
-                      "Основной отчёт",
-                      saved?.main_file_name
-                    )}
-                  </div>
+            <h3 className="mb-3 mt-5 text-sm font-semibold text-slate-700">2. Выберите месяц</h3>
 
-                  {saved && (
-                    <p className="mt-3 text-xs text-slate-500">
-                      Последнее обновление:{" "}
-                      {new Date(saved.updated_at).toLocaleString("ru-RU")}
-                    </p>
-                  )}
-                </article>
-              );
-            })}
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
+              {months
+                .filter((month) => Number(month.slice(0, 4)) === selectedYear)
+                .sort((a, b) => a.localeCompare(b))
+                .map((month) => {
+                  const future = month > currentMonth;
+                  const hasReports = Boolean(wbMonths[month]);
+                  const sales = monthlySales.find((item) => item.month === month)?.sales ?? 0;
+
+                  const classes = `rounded-xl border p-3 text-left ${
+                    future
+                      ? "cursor-not-allowed border-slate-100 bg-slate-100 text-slate-400"
+                      : month === currentMonth
+                        ? "border-violet-300 bg-violet-50 hover:bg-violet-100"
+                        : "border-slate-200 hover:border-violet-300 hover:bg-violet-50"
+                  }`;
+
+                  return future ? (
+                    <div key={month} aria-disabled="true" className={classes}>
+                      <span className="block text-sm font-medium capitalize">{monthLabel(month)}</span>
+                      <span className="mt-1 block text-xs text-slate-400">Пока недоступен</span>
+                    </div>
+                  ) : (
+                    <Link key={month} href={`/dashboard/${month}`} className={classes}>
+                      <span className="block text-sm font-medium capitalize">{monthLabel(month)}</span>
+                      <span className="mt-1 block text-xs text-slate-500">
+                      {hasReports
+  ? formatMoney(sales)
+  : month === currentMonth
+    ? "Текущий месяц"
+    : "Нет данных"}
+                      </span>
+                    </Link>
+                  );
+                })}
+            </div>
           </div>
         )}
       </section>
